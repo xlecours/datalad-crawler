@@ -6,13 +6,13 @@
 #   copyright and license terms.
 #
 # ## ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ##
-"""A pipeline for crawling a crcns dataset"""
+"""A pipeline for crawling a LORIS database"""
 
 # Import necessary nodes
 from ..nodes.crawl_url import crawl_url
 from datalad.utils import updated
 from ..nodes.annex import Annexificator
-from datalad_crawler.consts import ARCHIVES_SPECIAL_REMOTE, DATALAD_SPECIAL_REMOTE
+from datalad_crawler.consts import DATALAD_SPECIAL_REMOTE
 
 
 import json
@@ -28,18 +28,31 @@ class LorisAPIExtractor(object):
     def __call__(self, data):
         jsdata = json.loads(data["response"])
         for candidate in jsdata["Images"]:
-            yield updated(data, { "url" : self.apibase + candidate["Link"] })
+            yield { "url" : self.apibase + candidate["Link"] }
+        return
+
+def LORISAPIHeaderNodes(url):
+    print(url)
+    lgr.info("Extracting header names for" + (url["url"] + "/headers") )
+    yield updated(url, { "url" : url["url"] + "/headers" })
+
+class LorisAPIHeaderExtractor(object):
+    def __init__(self, apibase=None):
+        self.apibase = apibase
+
+    def __call__(self, data):
+        lgr.info("Got headers: "+ str(data))
         return
 
 def pipeline(url=None, apibase=None):
-    """Pipeline to crawl/annex a simple web page with some tarballs on it
+    """Pipeline to crawl/annex a LORIS database via the LORIS API.
     
-    If .gitattributes file in the repository already provides largefiles
-    setting, none would be provided here to calls to git-annex.  But if not -- 
-    README* and LICENSE* files will be added to git, while the rest to annex
+    It will crawl every file matching the format of the $API/project/images/
+    endpoint as documented in the LORIS API. Requires a LORIS version
+    which has API v0.0.3-dev (or higher).
     """
     if apibase == None:
-        raise "Wtf"
+        raise RuntimeError("Must set apibase that links are relative to.")
 
     lgr.info("Creating a pipeline to crawl data files from %s", url)
     annex = Annexificator(create=False,
@@ -51,12 +64,26 @@ def pipeline(url=None, apibase=None):
                 " and exclude=CHANGES* and exclude=README*"
                 " and exclude=*.[mc] and exclude=dataset*.json"
                 " and exclude=*.txt"
-                " and exclude=*.json"
+                # " and exclude=*.json"
                 " and exclude=*.tsv"
     ])
 
     return [
+            # Get the list of images
             crawl_url(url),
+            # Extract the image itself
             LorisAPIExtractor(apibase),
+            # Add it to git annex
             annex,
+            LORISAPIHeaderNodes,
+            crawl_url(),
+            LorisAPIHeaderExtractor(apibase),
+            #[
+                #LORISAPIHeaderNodes(apibase),
+                #crawl_url,
+                # Get the header endpoints
+                # Retrieve the URL
+                # Extract the data
+                ##LorisAPIHeaderExtractor,
+            #]
     ]
