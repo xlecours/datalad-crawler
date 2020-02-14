@@ -15,7 +15,7 @@ import os
 import re
 
 from os import listdir
-from os.path import join as opj, exists, isabs, lexists, curdir, realpath
+from os.path import join as opj, exists, isabs, lexists, curdir, realpath, isdir
 from os.path import split as ops
 from os.path import isdir
 from os.path import relpath
@@ -140,19 +140,38 @@ class initiate_dataset(object):
 
         backend = self.backend or cfg.obtain('datalad.crawl.default_backend', default='MD5E')
 
-        ds = create(
-                path=path,
-                force=False,
-                # no_annex=False,  # TODO: add as an arg
-                # Passing save arg based on backend was that we need to save only if
-                #  custom backend was specified, but now with dataset id -- should always save
-                # save=not bool(backend),
-                # annex_version=None,
-                annex_backend=backend,
-                #git_opts=None,
-                #annex_opts=None,
-                #annex_init_opts=None
-        )
+        try:
+            ds = create(
+                    path=path,
+                    force=False,
+                    # no_annex=False,  # TODO: add as an arg
+                    # Passing save arg based on backend was that we need to save only if
+                    #  custom backend was specified, but now with dataset id -- should always save
+                    # save=not bool(backend),
+                    # annex_version=None,
+                    annex_backend=backend,
+                    #git_opts=None,
+                    #annex_opts=None,
+                    #annex_init_opts=None
+            )
+        except TypeError:
+            # The exception was probably due to using annex_backend with new
+            # create. Try again without that parameter.
+            #
+            # TODO: Once the minimum DataLad version is 0.12.0, the create call
+            # above should be dropped.
+            ds = create(path=path, force=False)
+            if self.backend or cfg.get('dataset.crawl.default_backend'):
+                if self.backend:
+                    obsolete_method = "pipeline parameter"
+                else:
+                    obsolete_method = "'dataset.crawl.default_backend'"
+                lgr.warning(
+                    "Using backend configured by 'datalad.repo.backend' (%s). "
+                    "Configuring backend with %s is obsolete.",
+                    cfg.obtain("datalad.repo.backend", default="MD5E"),
+                    obsolete_method)
+
         if self.add_to_super:
             # place hack from 'add-to-super' times here
             # MIH: tests indicate that this wants to discover any dataset above
@@ -238,6 +257,7 @@ class Annexificator(object):
                  statusdb=None,
                  skip_problematic=False,
                  largefiles=None,
+                 batch_add=True,
                  **kwargs):
         """
 
@@ -276,6 +296,9 @@ class Annexificator(object):
         largefiles: str, optional
           A setting to pass as '-c annex.largefiles=' option to all git annex calls
           in case largefiles setting is not yet defined in "git attributes"
+        batch_add: bool, optional
+		  To be able to disable batched add invocation e.g. for the cases when it is 
+		  desired to manipulate that file right away (e.g. to drop)
         **kwargs : dict, optional
           to be passed into AnnexRepo
         """
@@ -321,6 +344,7 @@ class Annexificator(object):
         # TODO: may be should be a lazy centralized instance?
         self._providers = Providers.from_config_files()
         self.yield_non_updated = yield_non_updated
+        self.batch_add = batch_add
 
         if largefiles:
             repo_largefiles = self.repo.get_git_attributes().get('annex.largefiles', None)
@@ -417,7 +441,7 @@ class Annexificator(object):
         lgr.debug("Request to annex %(url)s to %(fpath)s", locals())
         # since filename could have come from url -- let's update with it
         updated_data = updated(data, {'filename': ops(fpath)[1],
-                                      # TODO? 'filepath': filepath
+                                      'filepath': filepath
                                       })
 
         if self.statusdb is not None and self._statusdb is None:
@@ -521,7 +545,7 @@ class Annexificator(object):
                     6, AnnexBatchCommandError, 3,  # up to 3**5=243 sec sleep
                     _call,
                     self.repo.add_url_to_file, fpath, url,
-                    options=annex_options, batch=True)
+                    options=annex_options, batch=self.batch_add)
             except AnnexBatchCommandError as exc:
                 if self.skip_problematic:
                     lgr.warning("Skipping %s due to %s", url, exc_str(exc))
@@ -1426,10 +1450,18 @@ class Annexificator(object):
         """Drop crawled file or all files if all is specified"""
         def _drop(data):
             if not all:
-                raise NotImplementedError("provide handling to drop specific file")
+                filepath = data.get('filepath', '')
+                filename = data.get('filename', '')
+                if filepath:
+                    if exists(filepath) and isdir(filepath) and filename:
+                        filepath = opj(filepath, filename)
+                    lgr.info("Dropping %s", filepath)
+                    self.repo.drop([filepath], options=['--force'] if force else [])
+                else:
+                    lgr.debug("Droping nothing since no filename was provided")
             else:
                 lgr.debug("Dropping all files in %s", self.repo)
-                self.repo.drop([], options=['--all'] + ['--force'] if force else [])
+                self.repo.drop([], options=['--all'] + (['--force'] if force else []))
         return _drop
 
     def initiate_dataset(self, *args, **kwargs):
