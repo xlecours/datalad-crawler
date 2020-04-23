@@ -13,7 +13,7 @@ from ..nodes.crawl_url import crawl_url
 from datalad.utils import updated
 from ..nodes.annex import Annexificator
 from datalad_crawler.consts import DATALAD_SPECIAL_REMOTE
-from os.path import basename
+from os.path import basename, join
 
 
 import json
@@ -33,9 +33,33 @@ class LorisAPIExtractor(object):
     def __call__(self, data):
         jsdata = json.loads(data["response"])
         for candidate in jsdata["Images"]:
+            candid = candidate["Candidate"]
+            visit = candidate["Visit"]
             filename = basename(candidate["Link"])
             self.meta[filename] = candidate
-            yield updated(data, { "url" : self.apibase + candidate["Link"] })
+            yield updated(data, {
+                "url" : join(self.apibase, 'candidates', candid),
+                "filename": "candidate.json",
+                "path": candid
+            })
+            yield updated(data, {
+                "url" : join(self.apibase, 'candidates', candid, visit),
+                "filename": "visit.json",
+                "path": join(candid, visit)
+            })
+            yield updated(data, {
+                "url" : join(self.apibase, 'candidates', candid, visit, 'instruments/handedness'),
+                "filename": "handedness.json",
+                "path": join(candid, visit)
+            })
+            yield updated(data, { 
+                "url" : join(self.apibase, 'candidates', candid, visit, 'images'),
+                "path": join(candid, visit, 'images')
+            })
+            yield updated(data, { 
+                "url" : self.apibase + candidate["Link"],
+                "path": join(candid, visit, 'images')
+            })
         return
 
     def finalize(self):
@@ -65,15 +89,14 @@ def pipeline(url=None, apibase=None):
     annex = Annexificator(
                 create=False,
                 statusdb='json',
+                skip_problematic=True,
                 special_remotes=[DATALAD_SPECIAL_REMOTE],
                 options=[
                     "-c",
                     "annex.largefiles="
-                    "exclude=Makefile and exclude=LICENSE* and exclude=ISSUES*"
-                    " and exclude=CHANGES* and exclude=README*"
-                    " and exclude=*.[mc] and exclude=dataset*.json"
-                    " and exclude=*.txt"
-                    " and exclude=*.tsv"
+                    "exclude=README.md and exclude=DATS.json and exclude=logo.png"
+                    " and exclude=.datalad/providers/loris.cfg"
+                    " and exclude=.datalad/crawl/crawl.cfg"
                 ]
     )
     lorisapi = LorisAPIExtractor(apibase, annex)
